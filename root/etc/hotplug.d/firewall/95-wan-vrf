@@ -1,0 +1,18 @@
+#!/bin/sh
+
+[ -x /etc/wan-vrf/apply.sh ] || exit 0
+
+case "${ACTION}" in
+	start|reload|restart)
+		:
+	;;
+	*)
+		exit 0
+	;;
+esac
+
+[ "$(uci -q get wan_vrf.main.auto_apply)" = "1" ] || exit 0
+
+/etc/wan-vrf/apply.sh hotplug firewall "${ACTION}" >/dev/null 2>&1
+
+exit 0

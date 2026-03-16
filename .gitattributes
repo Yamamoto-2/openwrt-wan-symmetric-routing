@@ -1,2 +1,11 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+*.sh text eol=lf
+Makefile text eol=lf
+*.mk text eol=lf
+*.md text eol=lf
+root/etc/config/* text eol=lf
+root/etc/init.d/* text eol=lf
+root/etc/hotplug.d/**/* text eol=lf
+root/etc/wan-vrf/* text eol=lf

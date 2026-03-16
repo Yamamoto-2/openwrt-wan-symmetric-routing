@@ -1,0 +1,26 @@
+#!/bin/sh
+
+[ -x /etc/wan-vrf/apply.sh ] || exit 0
+
+case "${ACTION}" in
+	ifup|ifupdate|ifdown)
+		:
+	;;
+	*)
+		exit 0
+	;;
+esac
+
+[ "$(uci -q get wan_vrf.main.auto_apply)" = "1" ] || exit 0
+
+PUBLIC_WAN="$(uci -q get wan_vrf.main.public_wan)"
+FAST_WAN="$(uci -q get wan_vrf.main.fast_wan)"
+LAN_NETWORK="$(uci -q get wan_vrf.main.lan_network)"
+
+case "${INTERFACE}" in
+	"${PUBLIC_WAN}"|"${FAST_WAN}"|"${LAN_NETWORK}")
+		/etc/wan-vrf/apply.sh hotplug "${ACTION}" "${INTERFACE}" >/dev/null 2>&1
+	;;
+esac
+
+exit 0

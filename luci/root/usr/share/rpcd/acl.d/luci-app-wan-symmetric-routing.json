@@ -1,0 +1,15 @@
+{
+  "luci-app-wan-symmetric-routing": {
+    "description": "Grant access to configure WAN Symmetric Routing",
+    "read": {
+      "uci": [
+        "wan_vrf"
+      ]
+    },
+    "write": {
+      "uci": [
+        "wan_vrf"
+      ]
+    }
+  }
+}

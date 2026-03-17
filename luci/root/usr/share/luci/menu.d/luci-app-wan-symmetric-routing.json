@@ -1,0 +1,15 @@
+{
+  "admin/network/wan-symmetric-routing": {
+    "title": "WAN Symmetric Routing",
+    "order": 90,
+    "action": {
+      "type": "view",
+      "path": "wan-symmetric-routing/settings"
+    },
+    "depends": {
+      "acl": [
+        "luci-app-wan-symmetric-routing"
+      ]
+    }
+  }
+}

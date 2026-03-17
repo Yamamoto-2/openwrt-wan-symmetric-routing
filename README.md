@@ -4,16 +4,16 @@ Shell-first OpenWrt/iStoreOS package for symmetric return-path routing in dual-W
 
 Current scope:
 
-- `fwmark + ip rule` MVP for symmetric return traffic
+- `fwmark + ip rule` symmetric return-path helper
 - Explicit public-member selection via `public_mode=zone|iface_list`
 - One `mark + table + rule` set per active public-WAN member
+- Core runtime package plus optional LuCI frontend package
 - UCI-based configuration in `/etc/config/wan_vrf`
 - `init.d` service and hotplug auto-reapply hooks
 - `diagnose.sh` for fast field debugging
 
 Current non-goals:
 
-- LuCI pages
 - VRF production mode
 - IPv6 policy routing
 - Deep coexistence with `mwan3` or other policy-routing packages
@@ -24,6 +24,22 @@ Current non-goals:
 .
 ├── Makefile
 ├── README.md
+├── luci
+│   ├── htdocs
+│   │   └── luci-static
+│   │       └── resources
+│   │           └── view
+│   │               └── wan-symmetric-routing
+│   │                   └── settings.js
+│   └── root
+│       └── usr
+│           └── share
+│               ├── luci
+│               │   └── menu.d
+│               │       └── luci-app-wan-symmetric-routing.json
+│               └── rpcd
+│                   └── acl.d
+│                       └── luci-app-wan-symmetric-routing.json
 └── root
     └── etc
         ├── config
@@ -41,7 +57,14 @@ Current non-goals:
             └── diagnose.sh
 ```
 
-## What the MVP does
+## Packages
+
+This repository now builds two installable packages:
+
+- `wan-symmetric-routing`: core shell runtime, config, service, hotplug hooks, and diagnostics
+- `luci-app-wan-symmetric-routing`: LuCI page and ACL/menu wiring, depending on the core package
+
+## What the package does
 
 The current implementation tags new inbound connections on each selected IPv4 WAN member, restores the tag on reply traffic from `lan_network`, and sends that reply through a per-member policy-routing table.
 
@@ -94,13 +117,51 @@ Notes:
 - `route_table_public`, `fwmark_public`, and `rule_priority` are treated as base values. Additional active members use the next numbers in sequence.
 - Members without IPv4 addresses, such as a standalone `wan6`, are skipped automatically.
 
-## Default workflow on target router
+## LuCI UI
 
-1. Install the package.
-2. Adjust `/etc/config/wan_vrf`.
-3. Enable the service with `/etc/init.d/wan_vrf enable`.
-4. Apply with `/etc/init.d/wan_vrf start`.
-5. Inspect state with `/etc/wan-vrf/diagnose.sh`.
+The LuCI frontend exposes the same core options:
+
+- `Enable`
+- `Public Member Source`
+- `Firewall Zone` or `Interface List`
+- `LAN Network`
+- `Route Table Base`
+- `FWMark Base`
+- `Rule Priority Base`
+- `Auto Apply`
+- `Debug Logging`
+
+The page is installed at `Network` -> `WAN Symmetric Routing`.
+
+## Build and install
+
+Inside an OpenWrt build tree, place this repository under `package/` and run:
+
+```sh
+make package/wan-symmetric-routing/compile V=s
+```
+
+That build produces both IPKs from the same package directory:
+
+- `wan-symmetric-routing_*.ipk`
+- `luci-app-wan-symmetric-routing_*.ipk`
+
+Typical install flow on a target router:
+
+```sh
+opkg install wan-symmetric-routing_*.ipk
+opkg install luci-app-wan-symmetric-routing_*.ipk
+/etc/init.d/wan_vrf enable
+/etc/init.d/wan_vrf start
+```
+
+## Release checklist
+
+- Verify `zone` mode on a multi-member `wan` firewall zone
+- Verify `iface_list` mode with one and multiple interfaces
+- Verify same-subnet access on static WANs such as `wan_10g`
+- Verify LuCI Save & Apply updates `/etc/config/wan_vrf`
+- Confirm both generated IPKs install cleanly on the target OpenWrt/iStoreOS release
 
 ## Notes
 
@@ -108,3 +169,7 @@ Notes:
 - `mode 'vrf'` is reserved for later work and is not implemented yet.
 - `lan_network` currently expects a single logical OpenWrt network such as `lan`.
 - When the selected source contains multiple WAN members, each active member receives its own mark and route table.
+
+## License
+
+This project is released under the MIT License. See LICENSE.

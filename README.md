@@ -102,7 +102,7 @@ config settings 'main'
     option mode 'fwmark'
     option public_mode 'iface_list'
     option public_zone 'wan'
-    option public_ifaces 'wan wan_10g'
+    option public_ifaces 'wan wan2'
     option lan_network 'lan'
     option route_table_public '100'
     option fwmark_public '0x100'
@@ -159,7 +159,7 @@ opkg install luci-app-wan-symmetric-routing_*.ipk
 
 - Verify `zone` mode on a multi-member `wan` firewall zone
 - Verify `iface_list` mode with one and multiple interfaces
-- Verify same-subnet access on static WANs such as `wan_10g`
+- Verify same-subnet access on static WANs such as `wan2`
 - Verify LuCI Save & Apply updates `/etc/config/wan_vrf`
 - Confirm both generated IPKs install cleanly on the target OpenWrt/iStoreOS release
 

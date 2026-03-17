@@ -48,7 +48,7 @@ return view.extend({
 
 		o = s.option(form.Value, 'public_ifaces', _('Interface List'));
 		o.depends('public_mode', 'iface_list');
-		o.placeholder = 'wan wan_10g';
+		o.placeholder = 'wan wan2';
 		o.rmempty = false;
 		o.validate = function(section_id, value) {
 			var currentMode = uci.get('wan_vrf', section_id, 'public_mode') || 'zone';
@@ -56,7 +56,7 @@ return view.extend({
 				return _('Please enter one or more logical interface names separated by spaces.');
 			return true;
 		};
-		o.description = _('Example: wan wan_10g');
+		o.description = _('Example: wan wan2');
 
 		o = s.option(form.Value, 'lan_network', _('LAN Network'));
 		o.placeholder = 'lan';

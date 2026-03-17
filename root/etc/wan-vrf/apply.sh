@@ -27,6 +27,7 @@ ACTIVE_MEMBERS=""
 ACTIVE_MEMBER_COUNT=0
 PREVIOUS_MEMBERS=""
 SEEN_PUBLIC_DEVICES=""
+RULE_FWMARK_MASK="0xffffffff"
 
 load_config() {
 	MODE="$(wan_vrf_get_cfg mode fwmark)"
@@ -201,7 +202,7 @@ flush_member_policy() {
 	printf '%s\n' "$members" | while IFS='|' read -r kind name dev mark table priority gateway; do
 		[ -n "$mark" ] || continue
 
-		while ip -4 rule del fwmark "${mark}/${mark}" lookup "$table" priority "$priority" >/dev/null 2>&1; do
+		while ip -4 rule del fwmark "${mark}/${RULE_FWMARK_MASK}" lookup "$table" priority "$priority" >/dev/null 2>&1; do
 			:
 		done
 
@@ -372,7 +373,7 @@ apply_policy_routing() {
 			ip -4 route replace table "$table" default dev "$dev" || exit 1
 		fi
 
-		ip -4 rule add fwmark "${mark}/${mark}" lookup "$table" priority "$priority" || exit 1
+		ip -4 rule add fwmark "${mark}/${RULE_FWMARK_MASK}" lookup "$table" priority "$priority" || exit 1
 	done
 	[ "$?" -eq 0 ] || return 1
 }

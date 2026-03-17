@@ -11,27 +11,156 @@ EVENT_CLASS="${2:-}"
 EVENT_NAME="${3:-}"
 
 MODE=""
-FAST_WAN=""
-PUBLIC_WAN=""
+PUBLIC_MODE=""
+PUBLIC_ZONE=""
+PUBLIC_IFACES=""
 LAN_NETWORK=""
-ROUTE_TABLE_PUBLIC=""
-FWMARK_PUBLIC=""
-RULE_PRIORITY=""
-PUBLIC_DEV=""
+ROUTE_TABLE_BASE=""
+FWMARK_BASE=""
+FWMARK_BASE_DEC="0"
+RULE_PRIORITY_BASE=""
 LAN_DEV=""
-FAST_DEV=""
-PUBLIC_GW=""
-MARK_SPEC=""
+PUBLIC_ZONE_NETWORKS=""
+PUBLIC_ZONE_DEVICES=""
+PUBLIC_TARGETS=""
+ACTIVE_MEMBERS=""
+ACTIVE_MEMBER_COUNT=0
+PREVIOUS_MEMBERS=""
+SEEN_PUBLIC_DEVICES=""
 
 load_config() {
 	MODE="$(wan_vrf_get_cfg mode fwmark)"
-	FAST_WAN="$(wan_vrf_get_cfg fast_wan wan10g)"
-	PUBLIC_WAN="$(wan_vrf_get_cfg public_wan wan_pppoe)"
+	PUBLIC_MODE="$(wan_vrf_get_cfg public_mode zone)"
+	PUBLIC_ZONE="$(wan_vrf_get_cfg public_zone wan)"
+	PUBLIC_IFACES="$(wan_vrf_get_cfg public_ifaces '')"
 	LAN_NETWORK="$(wan_vrf_get_cfg lan_network lan)"
-	ROUTE_TABLE_PUBLIC="$(wan_vrf_get_cfg route_table_public 100)"
-	FWMARK_PUBLIC="$(wan_vrf_get_cfg fwmark_public 0x100)"
-	RULE_PRIORITY="$(wan_vrf_get_cfg rule_priority 10000)"
-	MARK_SPEC="${FWMARK_PUBLIC}/${FWMARK_PUBLIC}"
+	ROUTE_TABLE_BASE="$(wan_vrf_get_cfg route_table_public 100)"
+	FWMARK_BASE="$(wan_vrf_get_cfg fwmark_public 0x100)"
+	FWMARK_BASE_DEC="$((FWMARK_BASE))"
+	RULE_PRIORITY_BASE="$(wan_vrf_get_cfg rule_priority 10000)"
+}
+
+append_active_member() {
+	local line
+
+	line="$1"
+	if [ -n "$ACTIVE_MEMBERS" ]; then
+		ACTIVE_MEMBERS="${ACTIVE_MEMBERS}
+${line}"
+	else
+		ACTIVE_MEMBERS="$line"
+	fi
+	ACTIVE_MEMBER_COUNT=$((ACTIVE_MEMBER_COUNT + 1))
+}
+
+member_device_seen() {
+	case " ${SEEN_PUBLIC_DEVICES} " in
+		*" $1 "*)
+			return 0
+		;;
+		*)
+			return 1
+		;;
+	esac
+}
+
+add_iface_member() {
+	local iface dev up proto ipv4_addr gateway mark table priority line
+
+	iface="$1"
+	dev="$(wan_vrf_get_iface_device "$iface")"
+	up="$(wan_vrf_get_iface_field "$iface" up)"
+	proto="$(wan_vrf_get_iface_field "$iface" proto)"
+	ipv4_addr="$(wan_vrf_get_iface_ipv4_address "$iface")"
+
+	[ -n "$dev" ] || {
+		wan_vrf_debug "Skipping public iface ${iface}: no device"
+		return 1
+	}
+
+	wan_vrf_device_exists "$dev" || {
+		wan_vrf_debug "Skipping public iface ${iface}: device ${dev} missing"
+		return 1
+	}
+
+	[ "$up" = "true" ] || {
+		wan_vrf_debug "Skipping public iface ${iface}: down"
+		return 1
+	}
+
+	member_device_seen "$dev" && return 1
+
+	[ -n "$ipv4_addr" ] || {
+		wan_vrf_debug "Skipping public iface ${iface}: no IPv4 address"
+		return 1
+	}
+
+	case "$proto" in
+		pppoe|ppp|pptp|l2tp)
+			gateway=""
+		;;
+		*)
+			gateway="$(wan_vrf_sanitize_ipv4_gateway "$(wan_vrf_get_iface_default_gateway "$iface")")"
+			[ -n "$gateway" ] || gateway="$(wan_vrf_sanitize_ipv4_gateway "$(wan_vrf_get_gateway_for_device "$dev")")"
+		;;
+	esac
+
+	mark="$(printf '0x%x' $((FWMARK_BASE_DEC + ACTIVE_MEMBER_COUNT)))"
+	table=$((ROUTE_TABLE_BASE + ACTIVE_MEMBER_COUNT))
+	priority=$((RULE_PRIORITY_BASE + ACTIVE_MEMBER_COUNT))
+	line="iface|${iface}|${dev}|${mark}|${table}|${priority}|${gateway}"
+
+	append_active_member "$line"
+	SEEN_PUBLIC_DEVICES="${SEEN_PUBLIC_DEVICES} ${dev}"
+	return 0
+}
+
+add_device_member() {
+	local dev gateway mark table priority line
+
+	dev="$1"
+	wan_vrf_device_exists "$dev" || {
+		wan_vrf_debug "Skipping public device ${dev}: link missing"
+		return 1
+	}
+
+	wan_vrf_device_has_ipv4_default_route "$dev" || {
+		wan_vrf_debug "Skipping public device ${dev}: no IPv4 default route"
+		return 1
+	}
+
+	member_device_seen "$dev" && return 1
+
+	gateway="$(wan_vrf_sanitize_ipv4_gateway "$(wan_vrf_get_gateway_for_device "$dev")")"
+	mark="$(printf '0x%x' $((FWMARK_BASE_DEC + ACTIVE_MEMBER_COUNT)))"
+	table=$((ROUTE_TABLE_BASE + ACTIVE_MEMBER_COUNT))
+	priority=$((RULE_PRIORITY_BASE + ACTIVE_MEMBER_COUNT))
+	line="device|${dev}|${dev}|${mark}|${table}|${priority}|${gateway}"
+
+	append_active_member "$line"
+	SEEN_PUBLIC_DEVICES="${SEEN_PUBLIC_DEVICES} ${dev}"
+	return 0
+}
+
+load_previous_members() {
+	local line entry
+
+	PREVIOUS_MEMBERS=""
+	[ -f "$WAN_VRF_STATE_FILE" ] || return 0
+
+	while IFS= read -r line; do
+		case "$line" in
+			member=*)
+				entry="${line#member=}"
+				if [ -n "$PREVIOUS_MEMBERS" ]; then
+					PREVIOUS_MEMBERS="${PREVIOUS_MEMBERS}
+${entry}"
+				else
+					PREVIOUS_MEMBERS="$entry"
+				fi
+			;;
+		esac
+	done < "$WAN_VRF_STATE_FILE"
 }
 
 remove_jump_rule() {
@@ -63,12 +192,26 @@ flush_mangle_rules() {
 	iptables -t mangle -X "$CHAIN_OUTPUT" >/dev/null 2>&1 || true
 }
 
-flush_policy_routing() {
-	while ip -4 rule del fwmark "$MARK_SPEC" lookup "$ROUTE_TABLE_PUBLIC" priority "$RULE_PRIORITY" >/dev/null 2>&1; do
-		:
-	done
+flush_member_policy() {
+	local members kind name dev mark table priority gateway
 
-	ip -4 route flush table "$ROUTE_TABLE_PUBLIC" >/dev/null 2>&1 || true
+	members="$1"
+	[ -n "$members" ] || return 0
+
+	printf '%s\n' "$members" | while IFS='|' read -r kind name dev mark table priority gateway; do
+		[ -n "$mark" ] || continue
+
+		while ip -4 rule del fwmark "${mark}/${mark}" lookup "$table" priority "$priority" >/dev/null 2>&1; do
+			:
+		done
+
+		ip -4 route flush table "$table" >/dev/null 2>&1 || true
+	done
+}
+
+flush_policy_routing() {
+	flush_member_policy "$PREVIOUS_MEMBERS"
+	flush_member_policy "$ACTIVE_MEMBERS"
 }
 
 flush_state() {
@@ -82,25 +225,77 @@ flush_all() {
 }
 
 resolve_runtime() {
-	PUBLIC_DEV="$(wan_vrf_get_iface_device "$PUBLIC_WAN")"
-	LAN_DEV="$(wan_vrf_get_iface_device "$LAN_NETWORK")"
-	FAST_DEV="$(wan_vrf_get_iface_device "$FAST_WAN")"
-	PUBLIC_GW="$(wan_vrf_get_gateway_for_device "$PUBLIC_DEV")"
+	local iface device
 
-	[ -n "$PUBLIC_DEV" ] || {
-		wan_vrf_log err "Unable to resolve device for public_wan=${PUBLIC_WAN}"
-		return 1
-	}
+	LAN_DEV="$(wan_vrf_get_iface_device "$LAN_NETWORK")"
+	ACTIVE_MEMBERS=""
+	ACTIVE_MEMBER_COUNT=0
+	SEEN_PUBLIC_DEVICES=""
+	PUBLIC_ZONE_NETWORKS=""
+	PUBLIC_ZONE_DEVICES=""
+	PUBLIC_TARGETS=""
 
 	[ -n "$LAN_DEV" ] || {
 		wan_vrf_log err "Unable to resolve device for lan_network=${LAN_NETWORK}"
 		return 1
 	}
 
-	if ! wan_vrf_iface_is_up "$PUBLIC_WAN"; then
-		wan_vrf_log notice "Public WAN ${PUBLIC_WAN} is currently down; rules flushed"
-		return 2
-	fi
+	case "$PUBLIC_MODE" in
+		zone)
+			PUBLIC_ZONE_NETWORKS="$(wan_vrf_get_firewall_zone_networks "$PUBLIC_ZONE")"
+			PUBLIC_ZONE_DEVICES="$(wan_vrf_get_firewall_zone_devices "$PUBLIC_ZONE")"
+
+			if [ -n "$PUBLIC_ZONE_NETWORKS" ]; then
+				PUBLIC_TARGETS="$PUBLIC_ZONE_NETWORKS"
+			fi
+
+			if [ -n "$PUBLIC_ZONE_DEVICES" ]; then
+				if [ -n "$PUBLIC_TARGETS" ]; then
+					PUBLIC_TARGETS="${PUBLIC_TARGETS} ${PUBLIC_ZONE_DEVICES}"
+				else
+					PUBLIC_TARGETS="$PUBLIC_ZONE_DEVICES"
+				fi
+			fi
+
+			[ -n "$PUBLIC_TARGETS" ] || {
+				wan_vrf_log err "Unable to resolve any members from public_zone=${PUBLIC_ZONE}"
+				return 1
+			}
+
+			for iface in $PUBLIC_ZONE_NETWORKS; do
+				add_iface_member "$iface"
+			done
+
+			for device in $PUBLIC_ZONE_DEVICES; do
+				add_device_member "$device"
+			done
+
+			[ "$ACTIVE_MEMBER_COUNT" -gt 0 ] || {
+				wan_vrf_log notice "No active public members found in public_zone=${PUBLIC_ZONE}; rules flushed"
+				return 2
+			}
+		;;
+		iface_list)
+			PUBLIC_TARGETS="$PUBLIC_IFACES"
+			[ -n "$PUBLIC_TARGETS" ] || {
+				wan_vrf_log err "public_mode=iface_list requires public_ifaces"
+				return 1
+			}
+
+			for iface in $PUBLIC_TARGETS; do
+				add_iface_member "$iface"
+			done
+
+			[ "$ACTIVE_MEMBER_COUNT" -gt 0 ] || {
+				wan_vrf_log notice "No active public members found in public_ifaces=${PUBLIC_IFACES}; rules flushed"
+				return 2
+			}
+		;;
+		*)
+			wan_vrf_log err "Unsupported public_mode=${PUBLIC_MODE}; expected zone or iface_list"
+			return 1
+		;;
+	esac
 
 	return 0
 }
@@ -110,7 +305,13 @@ apply_mangle_rules() {
 	reset_chain "$CHAIN_OUTPUT" || return 1
 
 	iptables -t mangle -A "$CHAIN_PREROUTING" -i "$LAN_DEV" -j CONNMARK --restore-mark || return 1
-	iptables -t mangle -A "$CHAIN_PREROUTING" -i "$PUBLIC_DEV" -m conntrack --ctstate NEW -j CONNMARK --set-xmark "$MARK_SPEC" || return 1
+
+	printf '%s\n' "$ACTIVE_MEMBERS" | while IFS='|' read -r kind name dev mark table priority gateway; do
+		[ -n "$mark" ] || continue
+		iptables -t mangle -A "$CHAIN_PREROUTING" -i "$dev" -m conntrack --ctstate NEW -j CONNMARK --set-xmark "${mark}/${mark}" || exit 1
+	done
+	[ "$?" -eq 0 ] || return 1
+
 	iptables -t mangle -A "$CHAIN_OUTPUT" -j CONNMARK --restore-mark || return 1
 
 	remove_jump_rule "$CHAIN_PREROUTING" PREROUTING
@@ -119,42 +320,99 @@ apply_mangle_rules() {
 	iptables -t mangle -I OUTPUT 1 -j "$CHAIN_OUTPUT" || return 1
 }
 
+install_member_link_routes() {
+	local dev table route prefix rest
+
+	dev="$1"
+	table="$2"
+
+	ip -4 route show dev "$dev" scope link 2>/dev/null | while IFS= read -r route; do
+		[ -n "$route" ] || continue
+		case "$route" in
+			default*)
+				continue
+			;;
+		esac
+
+		case " $route " in
+			*" dev "*)
+				ip -4 route replace table "$table" $route || exit 1
+			;;
+			*)
+				prefix="${route%% *}"
+				rest="${route#${prefix}}"
+				if [ "$rest" = "$route" ]; then
+					ip -4 route replace table "$table" "$prefix" dev "$dev" || exit 1
+				else
+					rest="${rest# }"
+					ip -4 route replace table "$table" "$prefix" dev "$dev" $rest || exit 1
+				fi
+			;;
+		esac
+	done
+
+	return "$?"
+}
+
 apply_policy_routing() {
 	flush_policy_routing
 
-	if [ -n "$PUBLIC_GW" ]; then
-		ip -4 route replace table "$ROUTE_TABLE_PUBLIC" default via "$PUBLIC_GW" dev "$PUBLIC_DEV" onlink || return 1
-	else
-		ip -4 route replace table "$ROUTE_TABLE_PUBLIC" default dev "$PUBLIC_DEV" || return 1
-	fi
+	printf '%s\n' "$ACTIVE_MEMBERS" | while IFS='|' read -r kind name dev mark table priority gateway; do
+		[ -n "$mark" ] || continue
 
-	ip -4 rule add fwmark "$MARK_SPEC" lookup "$ROUTE_TABLE_PUBLIC" priority "$RULE_PRIORITY" || return 1
+		wan_vrf_device_exists "$dev" || {
+			wan_vrf_log err "Selected public member ${name} resolved to missing device ${dev}"
+			exit 1
+		}
+
+		if [ -n "$gateway" ]; then
+			install_member_link_routes "$dev" "$table" || exit 1
+			ip -4 route replace table "$table" default via "$gateway" dev "$dev" onlink || exit 1
+		else
+			ip -4 route replace table "$table" default dev "$dev" || exit 1
+		fi
+
+		ip -4 rule add fwmark "${mark}/${mark}" lookup "$table" priority "$priority" || exit 1
+	done
+	[ "$?" -eq 0 ] || return 1
 }
 
 write_state() {
+	local kind name dev mark table priority gateway
+
 	{
 		printf 'last_apply=%s\n' "$(wan_vrf_now)"
 		printf 'mode=%s\n' "$MODE"
-		printf 'fast_wan=%s\n' "$FAST_WAN"
-		printf 'fast_dev=%s\n' "$FAST_DEV"
-		printf 'public_wan=%s\n' "$PUBLIC_WAN"
-		printf 'public_dev=%s\n' "$PUBLIC_DEV"
-		printf 'public_gateway=%s\n' "$PUBLIC_GW"
+		printf 'public_mode=%s\n' "$PUBLIC_MODE"
+		printf 'public_zone=%s\n' "$PUBLIC_ZONE"
+		printf 'public_ifaces=%s\n' "$PUBLIC_IFACES"
+		printf 'public_targets=%s\n' "$PUBLIC_TARGETS"
 		printf 'lan_network=%s\n' "$LAN_NETWORK"
 		printf 'lan_dev=%s\n' "$LAN_DEV"
-		printf 'route_table_public=%s\n' "$ROUTE_TABLE_PUBLIC"
-		printf 'fwmark_public=%s\n' "$FWMARK_PUBLIC"
-		printf 'rule_priority=%s\n' "$RULE_PRIORITY"
+		printf 'route_table_public=%s\n' "$ROUTE_TABLE_BASE"
+		printf 'fwmark_public=%s\n' "$FWMARK_BASE"
+		printf 'rule_priority=%s\n' "$RULE_PRIORITY_BASE"
+		printf 'member_count=%s\n' "$ACTIVE_MEMBER_COUNT"
 		printf 'event=%s %s\n' "$EVENT_CLASS" "$EVENT_NAME"
 		printf 'default_route_dev=%s\n' "$(wan_vrf_get_default_route_device)"
-	} >"$WAN_VRF_STATE_FILE"
+
+		printf '%s\n' "$ACTIVE_MEMBERS" | while IFS='|' read -r kind name dev mark table priority gateway; do
+			[ -n "$mark" ] || continue
+			printf 'member=%s|%s|%s|%s|%s|%s|%s\n' "$kind" "$name" "$dev" "$mark" "$table" "$priority" "$gateway"
+		done
+	} > "$WAN_VRF_STATE_FILE"
+}
+
+build_summary() {
+	printf '%s\n' "$ACTIVE_MEMBERS" | awk -F'|' 'NF >= 5 && $4 != "" { if (out) out = out ", "; out = out $2 "(" $3 " " $4 "->" $5 ")" } END { print out }'
 }
 
 main() {
-	local rc
+	local rc summary
 
-	wan_vrf_require_commands ip iptables jsonfilter ubus uci || exit 1
+	wan_vrf_require_commands ip iptables jsonfilter ubus uci sed awk || exit 1
 	load_config
+	load_previous_members
 
 	case "$ACTION" in
 		apply|reload)
@@ -216,7 +474,16 @@ main() {
 	}
 
 	write_state
-	wan_vrf_log notice "Applied WAN symmetric routing for public_wan=${PUBLIC_WAN} (${PUBLIC_DEV}) via table ${ROUTE_TABLE_PUBLIC}"
+	summary="$(build_summary)"
+
+	case "$PUBLIC_MODE" in
+		zone)
+			wan_vrf_log notice "Applied WAN symmetric routing for public_zone=${PUBLIC_ZONE}: ${summary}"
+		;;
+		iface_list)
+			wan_vrf_log notice "Applied WAN symmetric routing for public_ifaces=${PUBLIC_IFACES}: ${summary}"
+		;;
+	esac
 }
 
 main "$@"

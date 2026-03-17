@@ -87,8 +87,62 @@ wan_vrf_get_iface_device() {
 	printf '%s\n' "$device"
 }
 
+wan_vrf_get_iface_ipv4_address() {
+	local iface json address
+
+	iface="$1"
+	json="$(wan_vrf_get_iface_status_json "$iface")"
+	[ -n "$json" ] || return 1
+
+	address="$(printf '%s\n' "$json" | jsonfilter -e '@["ipv4-address"][0]["address"]' 2>/dev/null)"
+	printf '%s\n' "$address"
+}
+
 wan_vrf_iface_is_up() {
 	[ "$(wan_vrf_get_iface_field "$1" up)" = "true" ]
+}
+
+wan_vrf_device_exists() {
+	ip link show dev "$1" >/dev/null 2>&1
+}
+
+wan_vrf_device_has_ipv4_default_route() {
+	[ -n "$(ip -4 route show default dev "$1" 2>/dev/null | awk 'NR == 1 { print; exit }')" ]
+}
+
+wan_vrf_get_iface_default_gateway() {
+	local iface json gateway
+
+	iface="$1"
+	json="$(wan_vrf_get_iface_status_json "$iface")"
+	[ -n "$json" ] || return 1
+
+	gateway="$(printf '%s\n' "$json" | jsonfilter -e '@["route"][0]["nexthop"]' 2>/dev/null)"
+
+	if [ -z "$gateway" ]; then
+		gateway="$(printf '%s\n' "$json" | jsonfilter -e '@["inactive"]["route"][0]["nexthop"]' 2>/dev/null)"
+	fi
+
+	printf '%s\n' "$gateway"
+}
+
+wan_vrf_is_ipv4_address() {
+	case "$1" in
+		''|*:*|*[!0-9.]*)
+			return 1
+		;;
+		*)
+			return 0
+		;;
+	esac
+}
+
+wan_vrf_sanitize_ipv4_gateway() {
+	if wan_vrf_is_ipv4_address "$1"; then
+		printf '%s\n' "$1"
+	else
+		printf '\n'
+	fi
 }
 
 wan_vrf_get_default_route_device() {
@@ -100,6 +154,41 @@ wan_vrf_get_gateway_for_device() {
 
 	device="$1"
 	ip -4 route show default dev "$device" 2>/dev/null | awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit } }'
+}
+
+wan_vrf_get_firewall_zone_section() {
+	local zone_name section
+
+	zone_name="$1"
+
+	for section in $(uci -q show firewall | sed -n 's/^firewall\.\([^.=]*\)=zone$/\1/p'); do
+		if [ "$(uci -q get "firewall.${section}.name" 2>/dev/null)" = "$zone_name" ]; then
+			printf '%s\n' "$section"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+wan_vrf_get_firewall_zone_networks() {
+	local zone_name section
+
+	zone_name="$1"
+	section="$(wan_vrf_get_firewall_zone_section "$zone_name")"
+	[ -n "$section" ] || return 1
+
+	uci -q get "firewall.${section}.network" 2>/dev/null
+}
+
+wan_vrf_get_firewall_zone_devices() {
+	local zone_name section
+
+	zone_name="$1"
+	section="$(wan_vrf_get_firewall_zone_section "$zone_name")"
+	[ -n "$section" ] || return 1
+
+	uci -q get "firewall.${section}.device" 2>/dev/null
 }
 
 wan_vrf_now() {

@@ -1,24 +1,44 @@
 #!/bin/sh /etc/rc.common
 
+USE_PROCD=1
 START=95
 STOP=10
 
 SERVICE_NAME="wan_vrf"
 APPLY_SCRIPT="/etc/wan-vrf/apply.sh"
 
-start() {
+run_apply() {
 	[ -x "$APPLY_SCRIPT" ] || return 1
 	"$APPLY_SCRIPT" apply
+}
+
+run_flush() {
+	[ -x "$APPLY_SCRIPT" ] || return 0
+	"$APPLY_SCRIPT" flush
+}
+
+start() {
+	run_apply
 }
 
 reload() {
-	[ -x "$APPLY_SCRIPT" ] || return 1
-	"$APPLY_SCRIPT" apply
+	run_apply
 }
 
 stop() {
-	[ -x "$APPLY_SCRIPT" ] || return 0
-	"$APPLY_SCRIPT" flush
+	run_flush
+}
+
+start_service() {
+	run_apply
+}
+
+reload_service() {
+	run_apply
+}
+
+stop_service() {
+	run_flush
 }
 
 service_triggers() {

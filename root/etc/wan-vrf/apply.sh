@@ -14,12 +14,20 @@ MODE=""
 PUBLIC_MODE=""
 PUBLIC_ZONE=""
 PUBLIC_IFACES=""
-LAN_NETWORK=""
+LAN_MODE=""
+LAN_ZONE=""
+LAN_IFACES=""
+LEGACY_LAN_NETWORK=""
 ROUTE_TABLE_BASE=""
 FWMARK_BASE=""
 FWMARK_BASE_DEC="0"
 RULE_PRIORITY_BASE=""
-LAN_DEV=""
+LAN_ZONE_NETWORKS=""
+LAN_ZONE_DEVICES=""
+LAN_TARGETS=""
+LAN_MEMBERS=""
+LAN_MEMBER_COUNT=0
+SEEN_LAN_DEVICES=""
 PUBLIC_ZONE_NETWORKS=""
 PUBLIC_ZONE_DEVICES=""
 PUBLIC_TARGETS=""
@@ -34,11 +42,26 @@ load_config() {
 	PUBLIC_MODE="$(wan_vrf_get_cfg public_mode zone)"
 	PUBLIC_ZONE="$(wan_vrf_get_cfg public_zone wan)"
 	PUBLIC_IFACES="$(wan_vrf_get_cfg public_ifaces '')"
-	LAN_NETWORK="$(wan_vrf_get_cfg lan_network lan)"
+	LAN_MODE="$(wan_vrf_get_cfg lan_mode '')"
+	LAN_ZONE="$(wan_vrf_get_cfg lan_zone lan)"
+	LAN_IFACES="$(wan_vrf_get_cfg lan_ifaces '')"
+	LEGACY_LAN_NETWORK="$(wan_vrf_get_cfg lan_network '')"
 	ROUTE_TABLE_BASE="$(wan_vrf_get_cfg route_table_public 100)"
 	FWMARK_BASE="$(wan_vrf_get_cfg fwmark_public 0x100)"
 	FWMARK_BASE_DEC="$((FWMARK_BASE))"
 	RULE_PRIORITY_BASE="$(wan_vrf_get_cfg rule_priority 10000)"
+
+	if [ -z "$LAN_MODE" ]; then
+		if [ -n "$LEGACY_LAN_NETWORK" ]; then
+			LAN_MODE="iface_list"
+		else
+			LAN_MODE="zone"
+		fi
+	fi
+
+	if [ "$LAN_MODE" = "iface_list" ] && [ -z "$LAN_IFACES" ] && [ -n "$LEGACY_LAN_NETWORK" ]; then
+		LAN_IFACES="$LEGACY_LAN_NETWORK"
+	fi
 }
 
 append_active_member() {
@@ -54,6 +77,19 @@ ${line}"
 	ACTIVE_MEMBER_COUNT=$((ACTIVE_MEMBER_COUNT + 1))
 }
 
+append_lan_member() {
+	local line
+
+	line="$1"
+	if [ -n "$LAN_MEMBERS" ]; then
+		LAN_MEMBERS="${LAN_MEMBERS}
+${line}"
+	else
+		LAN_MEMBERS="$line"
+	fi
+	LAN_MEMBER_COUNT=$((LAN_MEMBER_COUNT + 1))
+}
+
 member_device_seen() {
 	case " ${SEEN_PUBLIC_DEVICES} " in
 		*" $1 "*)
@@ -63,6 +99,64 @@ member_device_seen() {
 			return 1
 		;;
 	esac
+}
+
+lan_device_seen() {
+	case " ${SEEN_LAN_DEVICES} " in
+		*" $1 "*)
+			return 0
+		;;
+		*)
+			return 1
+		;;
+	esac
+}
+
+add_lan_iface_member() {
+	local iface dev up line
+
+	iface="$1"
+	dev="$(wan_vrf_get_iface_device "$iface")"
+	up="$(wan_vrf_get_iface_field "$iface" up)"
+
+	[ -n "$dev" ] || {
+		wan_vrf_debug "Skipping LAN iface ${iface}: no device"
+		return 1
+	}
+
+	wan_vrf_device_exists "$dev" || {
+		wan_vrf_debug "Skipping LAN iface ${iface}: device ${dev} missing"
+		return 1
+	}
+
+	[ "$up" = "true" ] || {
+		wan_vrf_debug "Skipping LAN iface ${iface}: down"
+		return 1
+	}
+
+	lan_device_seen "$dev" && return 1
+
+	line="iface|${iface}|${dev}"
+	append_lan_member "$line"
+	SEEN_LAN_DEVICES="${SEEN_LAN_DEVICES} ${dev}"
+	return 0
+}
+
+add_lan_device_member() {
+	local dev line
+
+	dev="$1"
+	wan_vrf_device_exists "$dev" || {
+		wan_vrf_debug "Skipping LAN device ${dev}: link missing"
+		return 1
+	}
+
+	lan_device_seen "$dev" && return 1
+
+	line="device|${dev}|${dev}"
+	append_lan_member "$line"
+	SEEN_LAN_DEVICES="${SEEN_LAN_DEVICES} ${dev}"
+	return 0
 }
 
 add_iface_member() {
@@ -225,10 +319,79 @@ flush_all() {
 	flush_state
 }
 
+resolve_lan_runtime() {
+	local iface device
+
+	LAN_MEMBERS=""
+	LAN_MEMBER_COUNT=0
+	SEEN_LAN_DEVICES=""
+	LAN_ZONE_NETWORKS=""
+	LAN_ZONE_DEVICES=""
+	LAN_TARGETS=""
+
+	case "$LAN_MODE" in
+		zone)
+			LAN_ZONE_NETWORKS="$(wan_vrf_get_firewall_zone_networks "$LAN_ZONE")"
+			LAN_ZONE_DEVICES="$(wan_vrf_get_firewall_zone_devices "$LAN_ZONE")"
+
+			if [ -n "$LAN_ZONE_NETWORKS" ]; then
+				LAN_TARGETS="$LAN_ZONE_NETWORKS"
+			fi
+
+			if [ -n "$LAN_ZONE_DEVICES" ]; then
+				if [ -n "$LAN_TARGETS" ]; then
+					LAN_TARGETS="${LAN_TARGETS} ${LAN_ZONE_DEVICES}"
+				else
+					LAN_TARGETS="$LAN_ZONE_DEVICES"
+				fi
+			fi
+
+			[ -n "$LAN_TARGETS" ] || {
+				wan_vrf_log err "Unable to resolve any members from lan_zone=${LAN_ZONE}"
+				return 1
+			}
+
+			for iface in $LAN_ZONE_NETWORKS; do
+				add_lan_iface_member "$iface"
+			done
+
+			for device in $LAN_ZONE_DEVICES; do
+				add_lan_device_member "$device"
+			done
+
+			[ "$LAN_MEMBER_COUNT" -gt 0 ] || {
+				wan_vrf_log err "No active LAN members found in lan_zone=${LAN_ZONE}"
+				return 1
+			}
+		;;
+		iface_list)
+			LAN_TARGETS="$LAN_IFACES"
+			[ -n "$LAN_TARGETS" ] || {
+				wan_vrf_log err "lan_mode=iface_list requires lan_ifaces"
+				return 1
+			}
+
+			for iface in $LAN_TARGETS; do
+				add_lan_iface_member "$iface"
+			done
+
+			[ "$LAN_MEMBER_COUNT" -gt 0 ] || {
+				wan_vrf_log err "No active LAN members found in lan_ifaces=${LAN_IFACES}"
+				return 1
+			}
+		;;
+		*)
+			wan_vrf_log err "Unsupported lan_mode=${LAN_MODE}; expected zone or iface_list"
+			return 1
+		;;
+	esac
+
+	return 0
+}
+
 resolve_runtime() {
 	local iface device
 
-	LAN_DEV="$(wan_vrf_get_iface_device "$LAN_NETWORK")"
 	ACTIVE_MEMBERS=""
 	ACTIVE_MEMBER_COUNT=0
 	SEEN_PUBLIC_DEVICES=""
@@ -236,10 +399,7 @@ resolve_runtime() {
 	PUBLIC_ZONE_DEVICES=""
 	PUBLIC_TARGETS=""
 
-	[ -n "$LAN_DEV" ] || {
-		wan_vrf_log err "Unable to resolve device for lan_network=${LAN_NETWORK}"
-		return 1
-	}
+	resolve_lan_runtime || return 1
 
 	case "$PUBLIC_MODE" in
 		zone)
@@ -305,7 +465,11 @@ apply_mangle_rules() {
 	reset_chain "$CHAIN_PREROUTING" || return 1
 	reset_chain "$CHAIN_OUTPUT" || return 1
 
-	iptables -t mangle -A "$CHAIN_PREROUTING" -i "$LAN_DEV" -j CONNMARK --restore-mark || return 1
+	printf '%s\n' "$LAN_MEMBERS" | while IFS='|' read -r kind name dev; do
+		[ -n "$dev" ] || continue
+		iptables -t mangle -A "$CHAIN_PREROUTING" -i "$dev" -j CONNMARK --restore-mark || exit 1
+	done
+	[ "$?" -eq 0 ] || return 1
 
 	printf '%s\n' "$ACTIVE_MEMBERS" | while IFS='|' read -r kind name dev mark table priority gateway; do
 		[ -n "$mark" ] || continue
@@ -388,14 +552,22 @@ write_state() {
 		printf 'public_zone=%s\n' "$PUBLIC_ZONE"
 		printf 'public_ifaces=%s\n' "$PUBLIC_IFACES"
 		printf 'public_targets=%s\n' "$PUBLIC_TARGETS"
-		printf 'lan_network=%s\n' "$LAN_NETWORK"
-		printf 'lan_dev=%s\n' "$LAN_DEV"
+		printf 'lan_mode=%s\n' "$LAN_MODE"
+		printf 'lan_zone=%s\n' "$LAN_ZONE"
+		printf 'lan_ifaces=%s\n' "$LAN_IFACES"
+		printf 'lan_targets=%s\n' "$LAN_TARGETS"
 		printf 'route_table_public=%s\n' "$ROUTE_TABLE_BASE"
 		printf 'fwmark_public=%s\n' "$FWMARK_BASE"
 		printf 'rule_priority=%s\n' "$RULE_PRIORITY_BASE"
+		printf 'lan_member_count=%s\n' "$LAN_MEMBER_COUNT"
 		printf 'member_count=%s\n' "$ACTIVE_MEMBER_COUNT"
 		printf 'event=%s %s\n' "$EVENT_CLASS" "$EVENT_NAME"
 		printf 'default_route_dev=%s\n' "$(wan_vrf_get_default_route_device)"
+
+		printf '%s\n' "$LAN_MEMBERS" | while IFS='|' read -r kind name dev; do
+			[ -n "$dev" ] || continue
+			printf 'lan_member=%s|%s|%s\n' "$kind" "$name" "$dev"
+		done
 
 		printf '%s\n' "$ACTIVE_MEMBERS" | while IFS='|' read -r kind name dev mark table priority gateway; do
 			[ -n "$mark" ] || continue

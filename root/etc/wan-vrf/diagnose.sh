@@ -6,30 +6,14 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PUBLIC_MODE="$(wan_vrf_get_cfg public_mode zone)"
 PUBLIC_ZONE="$(wan_vrf_get_cfg public_zone wan)"
 PUBLIC_IFACES="$(wan_vrf_get_cfg public_ifaces '')"
-LAN_MODE="$(wan_vrf_get_cfg lan_mode '')"
-LAN_ZONE="$(wan_vrf_get_cfg lan_zone lan)"
-LAN_IFACES="$(wan_vrf_get_cfg lan_ifaces '')"
-LEGACY_LAN_NETWORK="$(wan_vrf_get_cfg lan_network '')"
+LAN_NETWORK="$(wan_vrf_get_cfg lan_network lan)"
 ROUTE_TABLE_BASE="$(wan_vrf_get_cfg route_table_public 100)"
 FWMARK_BASE="$(wan_vrf_get_cfg fwmark_public 0x100)"
 RULE_PRIORITY_BASE="$(wan_vrf_get_cfg rule_priority 10000)"
 
-if [ -z "$LAN_MODE" ]; then
-	if [ -n "$LEGACY_LAN_NETWORK" ]; then
-		LAN_MODE="iface_list"
-	else
-		LAN_MODE="zone"
-	fi
-fi
-
-if [ "$LAN_MODE" = "iface_list" ] && [ -z "$LAN_IFACES" ] && [ -n "$LEGACY_LAN_NETWORK" ]; then
-	LAN_IFACES="$LEGACY_LAN_NETWORK"
-fi
-
-PUBLIC_ZONE_NETWORKS="$(wan_vrf_get_firewall_zone_networks "$PUBLIC_ZONE")"
-PUBLIC_ZONE_DEVICES="$(wan_vrf_get_firewall_zone_devices "$PUBLIC_ZONE")"
-LAN_ZONE_NETWORKS="$(wan_vrf_get_firewall_zone_networks "$LAN_ZONE")"
-LAN_ZONE_DEVICES="$(wan_vrf_get_firewall_zone_devices "$LAN_ZONE")"
+LAN_DEV="$(wan_vrf_get_iface_device "$LAN_NETWORK")"
+ZONE_NETWORKS="$(wan_vrf_get_firewall_zone_networks "$PUBLIC_ZONE")"
+ZONE_DEVICES="$(wan_vrf_get_firewall_zone_devices "$PUBLIC_ZONE")"
 
 print_header() {
 	printf '\n== %s ==\n' "$1"
@@ -79,13 +63,10 @@ print_value "mode" "$(wan_vrf_get_cfg mode fwmark)"
 print_value "public_mode" "$PUBLIC_MODE"
 print_value "public_zone" "$PUBLIC_ZONE"
 print_value "public_ifaces" "$PUBLIC_IFACES"
-print_value "zone_networks" "$PUBLIC_ZONE_NETWORKS"
-print_value "zone_devices" "$PUBLIC_ZONE_DEVICES"
-print_value "lan_mode" "$LAN_MODE"
-print_value "lan_zone" "$LAN_ZONE"
-print_value "lan_ifaces" "$LAN_IFACES"
-print_value "lan_zone_networks" "$LAN_ZONE_NETWORKS"
-print_value "lan_zone_devices" "$LAN_ZONE_DEVICES"
+print_value "zone_networks" "$ZONE_NETWORKS"
+print_value "zone_devices" "$ZONE_DEVICES"
+print_value "lan_network" "$LAN_NETWORK"
+print_value "lan_dev" "$LAN_DEV"
 print_value "route_table_base" "$ROUTE_TABLE_BASE"
 print_value "fwmark_base" "$FWMARK_BASE"
 print_value "rule_priority" "$RULE_PRIORITY_BASE"

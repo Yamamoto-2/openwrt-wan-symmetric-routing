@@ -9,5 +9,3 @@ root/etc/config/* text eol=lf
 root/etc/init.d/* text eol=lf
 root/etc/hotplug.d/**/* text eol=lf
 root/etc/wan-vrf/* text eol=lf
-*.js text eol=lf
-*.json text eol=lf

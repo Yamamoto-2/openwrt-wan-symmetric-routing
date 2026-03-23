@@ -68,7 +68,7 @@ This repository now builds two installable packages:
 
 The current implementation tags new inbound connections on each selected IPv4 WAN member, restores the tag on reply traffic from `lan_network`, and sends that reply through a per-member policy-routing table.
 
-That means any selected WAN member can keep a symmetric return path without forcing normal outbound traffic onto that WAN.
+That means any selected WAN member can keep a symmetric return path without forcing normal outbound traffic onto that WAN. Multiple LAN networks (e.g., `lan lan2`) are supported as traffic sources.
 
 ## Configuration model
 
@@ -167,7 +167,7 @@ opkg install luci-app-wan-symmetric-routing_*.ipk
 
 - The current implementation assumes an `iptables`-based firewall compatibility layer is available.
 - `mode 'vrf'` is reserved for later work and is not implemented yet.
-- `lan_network` currently expects a single logical OpenWrt network such as `lan`.
+- `lan_network` accepts a space-separated list of logical OpenWrt networks (e.g., `lan lan2`).
 - When the selected source contains multiple WAN members, each active member receives its own mark and route table.
 
 ## License

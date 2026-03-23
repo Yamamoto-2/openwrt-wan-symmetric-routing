@@ -11,7 +11,11 @@ ROUTE_TABLE_BASE="$(wan_vrf_get_cfg route_table_public 100)"
 FWMARK_BASE="$(wan_vrf_get_cfg fwmark_public 0x100)"
 RULE_PRIORITY_BASE="$(wan_vrf_get_cfg rule_priority 10000)"
 
-LAN_DEV="$(wan_vrf_get_iface_device "$LAN_NETWORK")"
+LAN_DEVS=""
+for _lan_net in $LAN_NETWORK; do
+	_lan_d="$(wan_vrf_get_iface_device "$_lan_net")"
+	[ -n "$_lan_d" ] && LAN_DEVS="${LAN_DEVS:+$LAN_DEVS }${_lan_d}"
+done
 ZONE_NETWORKS="$(wan_vrf_get_firewall_zone_networks "$PUBLIC_ZONE")"
 ZONE_DEVICES="$(wan_vrf_get_firewall_zone_devices "$PUBLIC_ZONE")"
 
@@ -66,7 +70,7 @@ print_value "public_ifaces" "$PUBLIC_IFACES"
 print_value "zone_networks" "$ZONE_NETWORKS"
 print_value "zone_devices" "$ZONE_DEVICES"
 print_value "lan_network" "$LAN_NETWORK"
-print_value "lan_dev" "$LAN_DEV"
+print_value "lan_devs" "$LAN_DEVS"
 print_value "route_table_base" "$ROUTE_TABLE_BASE"
 print_value "fwmark_base" "$FWMARK_BASE"
 print_value "rule_priority" "$RULE_PRIORITY_BASE"

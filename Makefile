@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=wan-symmetric-routing
-PKG_VERSION:=0.1.1
+PKG_VERSION:=0.2.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -66,6 +66,7 @@ endef
 define Package/luci-app-wan-symmetric-routing/install
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/wan-symmetric-routing
 	$(INSTALL_DATA) ./luci/htdocs/luci-static/resources/view/wan-symmetric-routing/settings.js $(1)/www/luci-static/resources/view/wan-symmetric-routing/settings.js
+	$(INSTALL_DATA) ./luci/htdocs/luci-static/resources/view/wan-symmetric-routing/diagnostics.js $(1)/www/luci-static/resources/view/wan-symmetric-routing/diagnostics.js
 
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
 	$(INSTALL_DATA) ./luci/root/usr/share/luci/menu.d/luci-app-wan-symmetric-routing.json $(1)/usr/share/luci/menu.d/luci-app-wan-symmetric-routing.json

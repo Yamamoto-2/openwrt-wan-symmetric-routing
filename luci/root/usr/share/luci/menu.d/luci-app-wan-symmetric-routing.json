@@ -3,13 +3,28 @@
     "title": "WAN Symmetric Routing",
     "order": 90,
     "action": {
-      "type": "view",
-      "path": "wan-symmetric-routing/settings"
+      "type": "firstchild"
     },
     "depends": {
       "acl": [
         "luci-app-wan-symmetric-routing"
       ]
+    }
+  },
+  "admin/network/wan-symmetric-routing/settings": {
+    "title": "Settings",
+    "order": 1,
+    "action": {
+      "type": "view",
+      "path": "wan-symmetric-routing/settings"
+    }
+  },
+  "admin/network/wan-symmetric-routing/diagnostics": {
+    "title": "Diagnostics",
+    "order": 2,
+    "action": {
+      "type": "view",
+      "path": "wan-symmetric-routing/diagnostics"
     }
   }
 }

@@ -1,14 +1,61 @@
 'use strict';
 'require form';
+'require fs';
 'require uci';
+'require ui';
 'require view';
 
 return view.extend({
 	load: function() {
-		return uci.load('wan_vrf');
+		return Promise.all([
+			uci.load('wan_vrf'),
+			fs.stat('/tmp/wan-vrf.last_apply').then(function() {
+				return true;
+			}).catch(function() {
+				return false;
+			}),
+			fs.read('/tmp/wan-vrf.last_apply').then(function(content) {
+				var match = content ? content.match(/^last_apply=(.+)$/m) : null;
+				return match ? match[1] : null;
+			}).catch(function() {
+				return null;
+			})
+		]);
 	},
 
-	render: function() {
+	render: function(data) {
+		var isActive = data[1];
+		var lastApply = data[2];
+		var enabled = uci.get('wan_vrf', 'main', 'enabled') === '1';
+
+		var bannerStyle, bannerText, showButton;
+		if (isActive) {
+			bannerStyle = 'background:#d4edda;color:#155724;border:1px solid #c3e6cb;';
+			bannerText = _('Symmetric routing rules are active.') +
+				(lastApply ? ' (' + lastApply + ')' : '');
+			showButton = false;
+		} else if (enabled) {
+			bannerStyle = 'background:#fff3cd;color:#856404;border:1px solid #ffeeba;';
+			bannerText = _('Service is enabled but rules are not applied.');
+			showButton = true;
+		} else {
+			bannerStyle = 'background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;';
+			bannerText = _('Service is disabled.');
+			showButton = true;
+		}
+
+		var bannerChildren = [E('span', {}, bannerText)];
+		if (showButton) {
+			bannerChildren.push(E('button', {
+				'class': 'cbi-button cbi-button-action',
+				'click': ui.createHandlerFn(this, 'handleApply')
+			}, enabled ? _('Apply Now') : _('Enable & Apply')));
+		}
+
+		var banner = E('div', {
+			'style': bannerStyle + 'padding:12px 16px;border-radius:6px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;'
+		}, bannerChildren);
+
 		var m, s, o;
 
 		m = new form.Map('wan_vrf', _('WAN Symmetric Routing'),
@@ -58,9 +105,10 @@ return view.extend({
 		};
 		o.description = _('Example: wan wan2');
 
-		o = s.option(form.Value, 'lan_network', _('LAN Network'));
+		o = s.option(form.Value, 'lan_network', _('LAN Networks'));
 		o.placeholder = 'lan';
 		o.rmempty = false;
+		o.description = _('Space-separated list of LAN network names. Example: lan lan2');
 
 		o = s.option(form.Value, 'route_table_public', _('Route Table Base'));
 		o.datatype = 'uinteger';
@@ -92,6 +140,34 @@ return view.extend({
 		o.default = o.disabled;
 		o.description = _('Write extra diagnostics to logread when troubleshooting.');
 
-		return m.render();
+		return m.render().then(function(mapEl) {
+			return E('div', {}, [banner, mapEl]);
+		});
+	},
+
+	handleApply: function() {
+		var enabled = uci.get('wan_vrf', 'main', 'enabled') === '1';
+		var chain = Promise.resolve();
+
+		if (!enabled) {
+			chain = chain.then(function() {
+				return uci.set('wan_vrf', 'main', 'enabled', '1');
+			}).then(function() {
+				return uci.save();
+			}).then(function() {
+				return uci.apply();
+			}).then(function() {
+				return fs.exec('/etc/init.d/wan_vrf', ['enable']);
+			});
+		}
+
+		return chain.then(function() {
+			return fs.exec('/etc/init.d/wan_vrf', ['start']);
+		}).then(function() {
+			location.reload();
+		}).catch(function(err) {
+			ui.addNotification(null,
+				E('p', _('Failed: ') + (err.message || err)));
+		});
 	}
 });

@@ -19,7 +19,7 @@ ROUTE_TABLE_BASE=""
 FWMARK_BASE=""
 FWMARK_BASE_DEC="0"
 RULE_PRIORITY_BASE=""
-LAN_DEV=""
+LAN_DEVS=""
 PUBLIC_ZONE_NETWORKS=""
 PUBLIC_ZONE_DEVICES=""
 PUBLIC_TARGETS=""
@@ -228,7 +228,7 @@ flush_all() {
 resolve_runtime() {
 	local iface device
 
-	LAN_DEV="$(wan_vrf_get_iface_device "$LAN_NETWORK")"
+	LAN_DEVS=""
 	ACTIVE_MEMBERS=""
 	ACTIVE_MEMBER_COUNT=0
 	SEEN_PUBLIC_DEVICES=""
@@ -236,8 +236,17 @@ resolve_runtime() {
 	PUBLIC_ZONE_DEVICES=""
 	PUBLIC_TARGETS=""
 
-	[ -n "$LAN_DEV" ] || {
-		wan_vrf_log err "Unable to resolve device for lan_network=${LAN_NETWORK}"
+	for _lan_net in $LAN_NETWORK; do
+		_lan_d="$(wan_vrf_get_iface_device "$_lan_net")"
+		if [ -n "$_lan_d" ]; then
+			LAN_DEVS="${LAN_DEVS:+$LAN_DEVS }${_lan_d}"
+		else
+			wan_vrf_log warning "Unable to resolve device for lan_network entry '${_lan_net}'; skipping"
+		fi
+	done
+
+	[ -n "$LAN_DEVS" ] || {
+		wan_vrf_log err "Unable to resolve any device for lan_network='${LAN_NETWORK}'"
 		return 1
 	}
 
@@ -305,7 +314,9 @@ apply_mangle_rules() {
 	reset_chain "$CHAIN_PREROUTING" || return 1
 	reset_chain "$CHAIN_OUTPUT" || return 1
 
-	iptables -t mangle -A "$CHAIN_PREROUTING" -i "$LAN_DEV" -j CONNMARK --restore-mark || return 1
+	for _lan_d in $LAN_DEVS; do
+		iptables -t mangle -A "$CHAIN_PREROUTING" -i "$_lan_d" -j CONNMARK --restore-mark || return 1
+	done
 
 	printf '%s\n' "$ACTIVE_MEMBERS" | while IFS='|' read -r kind name dev mark table priority gateway; do
 		[ -n "$mark" ] || continue
@@ -389,7 +400,7 @@ write_state() {
 		printf 'public_ifaces=%s\n' "$PUBLIC_IFACES"
 		printf 'public_targets=%s\n' "$PUBLIC_TARGETS"
 		printf 'lan_network=%s\n' "$LAN_NETWORK"
-		printf 'lan_dev=%s\n' "$LAN_DEV"
+		printf 'lan_devs=%s\n' "$LAN_DEVS"
 		printf 'route_table_public=%s\n' "$ROUTE_TABLE_BASE"
 		printf 'fwmark_public=%s\n' "$FWMARK_BASE"
 		printf 'rule_priority=%s\n' "$RULE_PRIORITY_BASE"

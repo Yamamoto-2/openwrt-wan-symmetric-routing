@@ -5,7 +5,12 @@
       "WebFetch(domain:openwrt.github.io)",
       "WebFetch(domain:blog.freifunk.net)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(xargs ls:*)",
+      "Bash(grep -n \"iptables\" root/etc/wan-vrf/*.sh)",
+      "Bash(bash -n root/etc/wan-vrf/apply.sh)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(bash -n root/etc/wan-vrf/diagnose.sh)"
     ]
   }
 }

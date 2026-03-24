@@ -92,13 +92,8 @@ print_state_tables
 print_header "Main Default Route"
 run_cmd ip -4 route show default
 
-print_header "Mangle Rules"
-run_cmd iptables -t mangle -S WAN_VRF_PREROUTING
-run_cmd iptables -t mangle -S WAN_VRF_OUTPUT
-
-print_header "Mangle Counters"
-run_cmd iptables -t mangle -L WAN_VRF_PREROUTING -n -v
-run_cmd iptables -t mangle -L WAN_VRF_OUTPUT -n -v
+print_header "nftables Rules"
+run_cmd nft list table inet wan_vrf
 
 if wan_vrf_command_exists logread; then
 	print_header "Recent Logs"

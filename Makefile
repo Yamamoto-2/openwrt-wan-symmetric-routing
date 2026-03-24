@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=wan-symmetric-routing
-PKG_VERSION:=0.2.0
+PKG_VERSION:=0.3.0
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_LICENSE_FILES:=LICENSE
@@ -16,7 +16,7 @@ define Package/wan-symmetric-routing
   CATEGORY:=Network
   SUBMENU:=Routing and Redirection
   TITLE:=Dual-WAN symmetric return-path routing helper
-  DEPENDS:=+ip-full +iptables +jsonfilter +ubus +uci
+  DEPENDS:=+ip-full +nftables +jsonfilter +ubus +uci
 endef
 
 define Package/wan-symmetric-routing/description

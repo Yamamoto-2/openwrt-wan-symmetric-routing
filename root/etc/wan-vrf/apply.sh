@@ -3,8 +3,7 @@
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 . "${SCRIPT_DIR}/core.sh"
 
-CHAIN_PREROUTING="WAN_VRF_PREROUTING"
-CHAIN_OUTPUT="WAN_VRF_OUTPUT"
+NFT_TABLE="inet wan_vrf"
 
 ACTION="${1:-apply}"
 EVENT_CLASS="${2:-}"
@@ -164,33 +163,22 @@ ${entry}"
 	done < "$WAN_VRF_STATE_FILE"
 }
 
-remove_jump_rule() {
+flush_nft_table() {
+	nft delete table $NFT_TABLE >/dev/null 2>&1 || true
+}
+
+flush_legacy_iptables() {
+	command -v iptables >/dev/null 2>&1 || return 0
 	local chain parent
-
-	chain="$1"
-	parent="$2"
-
-	while iptables -t mangle -D "$parent" -j "$chain" >/dev/null 2>&1; do
-		:
+	for parent in PREROUTING OUTPUT FORWARD; do
+		for chain in WAN_VRF_PREROUTING WAN_VRF_OUTPUT WAN_VRF_MSS; do
+			while iptables -t mangle -D "$parent" -j "$chain" >/dev/null 2>&1; do :; done
+		done
 	done
-}
-
-reset_chain() {
-	local chain
-
-	chain="$1"
-	iptables -t mangle -N "$chain" >/dev/null 2>&1 || true
-	iptables -t mangle -F "$chain" >/dev/null 2>&1 || return 1
-}
-
-flush_mangle_rules() {
-	remove_jump_rule "$CHAIN_PREROUTING" PREROUTING
-	remove_jump_rule "$CHAIN_OUTPUT" OUTPUT
-
-	iptables -t mangle -F "$CHAIN_PREROUTING" >/dev/null 2>&1 || true
-	iptables -t mangle -X "$CHAIN_PREROUTING" >/dev/null 2>&1 || true
-	iptables -t mangle -F "$CHAIN_OUTPUT" >/dev/null 2>&1 || true
-	iptables -t mangle -X "$CHAIN_OUTPUT" >/dev/null 2>&1 || true
+	for chain in WAN_VRF_PREROUTING WAN_VRF_OUTPUT WAN_VRF_MSS; do
+		iptables -t mangle -F "$chain" >/dev/null 2>&1 || true
+		iptables -t mangle -X "$chain" >/dev/null 2>&1 || true
+	done
 }
 
 flush_member_policy() {
@@ -220,7 +208,8 @@ flush_state() {
 }
 
 flush_all() {
-	flush_mangle_rules
+	flush_nft_table
+	flush_legacy_iptables
 	flush_policy_routing
 	flush_state
 }
@@ -310,26 +299,63 @@ resolve_runtime() {
 	return 0
 }
 
-apply_mangle_rules() {
-	reset_chain "$CHAIN_PREROUTING" || return 1
-	reset_chain "$CHAIN_OUTPUT" || return 1
+get_device_mtu() {
+	local dev mtu
+	dev="$1"
+	mtu="$(cat "/sys/class/net/${dev}/mtu" 2>/dev/null)"
+	printf '%s' "${mtu:-1500}"
+}
 
+apply_nft_rules() {
+	local dev_mtu dev_mss ruleset
+
+	# Build prerouting rules: restore ct mark from LAN, set ct mark on WAN NEW
+	local prerouting_rules=""
 	for _lan_d in $LAN_DEVS; do
-		iptables -t mangle -A "$CHAIN_PREROUTING" -i "$_lan_d" -j CONNMARK --restore-mark || return 1
+		prerouting_rules="${prerouting_rules}
+		iifname \"${_lan_d}\" counter meta mark set ct mark"
 	done
 
-	printf '%s\n' "$ACTIVE_MEMBERS" | while IFS='|' read -r kind name dev mark table priority gateway; do
-		[ -n "$mark" ] || continue
-		iptables -t mangle -A "$CHAIN_PREROUTING" -i "$dev" -m conntrack --ctstate NEW -j CONNMARK --set-xmark "${mark}/${mark}" || exit 1
-	done
-	[ "$?" -eq 0 ] || return 1
+	local IFS_SAVE="$IFS"
+	while IFS='|' read -r _kind _name _dev _mark _table _priority _gateway; do
+		[ -n "$_mark" ] || continue
+		prerouting_rules="${prerouting_rules}
+		iifname \"${_dev}\" ct state new counter ct mark set ${_mark}"
+	done <<EOF
+$(printf '%s\n' "$ACTIVE_MEMBERS")
+EOF
+	IFS="$IFS_SAVE"
 
-	iptables -t mangle -A "$CHAIN_OUTPUT" -j CONNMARK --restore-mark || return 1
+	# Build MSS clamping rules per WAN device
+	local mss_rules=""
+	while IFS='|' read -r _kind _name _dev _mark _table _priority _gateway; do
+		[ -n "$_dev" ] || continue
+		dev_mtu="$(get_device_mtu "$_dev")"
+		dev_mss=$((dev_mtu - 40))
+		mss_rules="${mss_rules}
+		iifname \"${_dev}\" tcp flags syn / syn,rst counter tcp option maxseg size set ${dev_mss}
+		oifname \"${_dev}\" tcp flags syn / syn,rst counter tcp option maxseg size set ${dev_mss}"
+	done <<EOF
+$(printf '%s\n' "$ACTIVE_MEMBERS")
+EOF
 
-	remove_jump_rule "$CHAIN_PREROUTING" PREROUTING
-	remove_jump_rule "$CHAIN_OUTPUT" OUTPUT
-	iptables -t mangle -I PREROUTING 1 -j "$CHAIN_PREROUTING" || return 1
-	iptables -t mangle -I OUTPUT 1 -j "$CHAIN_OUTPUT" || return 1
+	# Apply atomically
+	ruleset="table ${NFT_TABLE}
+delete table ${NFT_TABLE}
+table ${NFT_TABLE} {
+	chain prerouting {
+		type filter hook prerouting priority mangle; policy accept;${prerouting_rules}
+	}
+	chain output {
+		type route hook output priority mangle; policy accept;
+		counter meta mark set ct mark
+	}
+	chain forward_mss {
+		type filter hook forward priority mangle; policy accept;${mss_rules}
+	}
+}"
+
+	printf '%s\n' "$ruleset" | nft -f - || return 1
 }
 
 install_member_link_routes() {
@@ -422,7 +448,7 @@ build_summary() {
 main() {
 	local rc summary
 
-	wan_vrf_require_commands ip iptables jsonfilter ubus uci sed awk || exit 1
+	wan_vrf_require_commands ip nft jsonfilter ubus uci sed awk || exit 1
 	load_config
 	load_previous_members
 
@@ -473,9 +499,9 @@ main() {
 		;;
 	esac
 
-	apply_mangle_rules || {
+	apply_nft_rules || {
 		flush_all
-		wan_vrf_log err "Failed to install mangle rules"
+		wan_vrf_log err "Failed to install nftables rules"
 		exit 1
 	}
 
